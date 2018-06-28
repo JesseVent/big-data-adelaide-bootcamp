@@ -1,0 +1,121 @@
+---
+title: "Predicting Audits"
+author: "Jesse Vent"
+output:
+  html_document:
+    number_sections: true
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Loading and Exploring Data
+
+##Loading libraries required and reading the data into R
+
+Loading R packages used besides base R.
+
+```{r, message=FALSE, warning=FALSE}
+library(Hmisc)
+library(knitr)
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(randomForest)
+library(gridExtra)
+library(ROCR)
+library(corrplot)
+library(tidyr)
+library(rpart)
+```
+
+Below, I am reading the csv's as dataframes into R.
+
+```{r}
+train <- read.csv("audit_train.csv", stringsAsFactors = F, na.strings = c("NA", ""))
+test <- read.csv("audit_test.csv", stringsAsFactors = F, na.strings = c("NA", ""))
+```
+
+##Data size and structure
+
+Lets look at the structure first.
+
+```{r}
+str(train)
+```
+
+Below I am merging test and train, as this is required for data cleaning and feature engineering.
+
+```{r}
+test$Adjustment <- NA
+test$Target <- NA
+all <- rbind(train, test)
+
+ggplot(data=all, aes(x=Education), fill=Target) +
+    geom_bar(stat="count")
+ggplot(data=all, aes(x=Employment)) +
+    geom_bar(stat="count")
+ggplot(data=all, aes(x=Marital)) +
+    geom_bar(stat="count")
+ggplot(data=all, aes(x=Occupation)) +
+    geom_bar(stat="count")
+
+```
+
+
+##Completeness of the data
+
+Lets see which variables contain missing values or NA's
+
+```{r}
+sapply(all, function(x) {sum(is.na(x))})
+```
+Lets replace the NA's for the categories with unknown as they haven't been provided. This could be a factor in itself.
+
+```{r}
+df <- all %>% replace_na(list("Employment" = "unknown", "Education" = "unknown", "Marital" = "unknown", "Occupation" = "unknown", "Accounts" = "unknown", "Gender" = "unknown"))
+sapply(df, function(x) {sum(is.na(x))})
+```
+Now lets impute the NA variables in Age.
+```{r}
+summary(all$Age)
+Agefit <- rpart(Age ~ Employment + Education + Marital + Occupation + Income + Gender + Deductions + Hours, data = df[!is.na(df$Age),], method = "anova")
+df$Age[is.na(df$Age)] <- predict(Agefit, df[is.na(df$Age),])
+sapply(df, function(x) {sum(is.na(x))})
+```
+Lets do the same for income, deductions and hours.
+```{r}
+Incomefit <- rpart(Income ~ Employment + Education + Marital + Occupation + Age + Gender + Deductions + Hours, data = df[!is.na(df$Income),], method = "anova")
+df$Income[is.na(df$Income)] <- predict(Incomefit, df[is.na(df$Income),])
+
+Deductionsfit <- rpart(Deductions ~ Employment + Education + Marital + Occupation + Income + Gender + Age + Hours, data = df[!is.na(df$Deductions),], method = "anova")
+df$Deductions[is.na(df$Deductions)] <- predict(Deductionsfit, df[is.na(df$Deductions),])
+
+Hoursfit <- rpart(Hours ~ Employment + Education + Marital + Occupation + Income + Gender + Deductions + Age, data = df[!is.na(df$Hours),], method = "anova")
+df$Hours[is.na(df$Hours)] <- predict(Hoursfit, df[is.na(df$Hours),])
+sapply(df, function(x) {sum(is.na(x))})
+```
+
+Adjustment relates to fraud amounts, lets just remove it for now and convert our category variables into factors.
+
+```{r}
+df$Adjustment <- NULL
+df$Employment <-as.factor(df$Employment)
+df$Education <- as.factor(df$Education)
+df$Marital <- as.factor(df$Marital)
+df$Occupation <- as.factor(df$Occupation)
+df$Gender <- as.factor(df$Gender)
+df$Accounts <- as.factor(df$Accounts)
+```
+
+###The Target Variable
+Lets see how many people received a audit.
+
+```{r, out.width="50%"}
+ggplot(df[!is.na(df$Target),], aes(x = Target, fill = Target)) +
+  geom_bar(stat='count') +
+  labs(x = 'How many people needed an audit?') +
+        geom_label(stat='count',aes(label=..count..), size=7) 
